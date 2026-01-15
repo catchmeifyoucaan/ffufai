@@ -25,6 +25,7 @@ ffufai is an AI-powered wrapper for the popular web fuzzer ffuf. It automaticall
 - Multi-provider routing with Gemini-first priority and optional consensus mode
 - Profiles and goals to bias toward critical targets
 - Wappalyzer-style signature detection for fast tech hints
+- Tech-aware wordlist selection via catalog mappings
 - Optional feedback loop that refines wordlists based on ffuf results
 - Active-learning persistence of successful findings
 - DNS/TLS and error-page context enrichment
@@ -153,8 +154,14 @@ ffufai accepts all the parameters that ffuf does, plus a few additional ones:
 - `--findings-path`: Path to the findings persistence file (default `~/.cache/ffufai/findings.json`).  
   Example: `ffufai --findings-path /tmp/ffufai-findings.json -u https://example.com/FUZZ -w wordlist.txt`
 
+- `--knowledge-path`: Path to the global knowledge base (default `~/.cache/ffufai/knowledge.json`).  
+  Example: `ffufai --knowledge-path /tmp/ffufai-knowledge.json -u https://example.com/FUZZ -w wordlist.txt`
+
 - `--signature-path`: Path to the tech signature JSON file (default `config/tech_signatures.json`).  
   Example: `ffufai --signature-path /tmp/tech_signatures.json -u https://example.com/FUZZ -w wordlist.txt`
+
+- `--wordlist-catalog`: Path to the wordlist catalog JSON file (default `config/wordlist_catalog.json`).  
+  Example: `ffufai --wordlist-catalog /tmp/wordlist_catalog.json -u https://example.com/FUZZ -w wordlist.txt`
 
 - `--providers`: Comma-separated provider order (gemini,openai,anthropic,groq,openrouter).  
   Example: `ffufai --providers gemini,openai,groq -u https://example.com/FUZZ -w wordlist.txt`
@@ -173,6 +180,12 @@ ffufai accepts all the parameters that ffuf does, plus a few additional ones:
 
 - `--ai-strategy`: Use AI to tune mode and list sizes.  
   Example: `ffufai --ai-strategy -u https://example.com/FUZZ -w wordlist.txt`
+
+- `--recon`: Enable recon-driven wordlist generation (robots/sitemap/JS).  
+  Example: `ffufai --recon -u https://example.com/FUZZ -w wordlist.txt`
+
+- `--recon-max-js`: Max JS files to mine for paths (default 5).  
+  Example: `ffufai --recon --recon-max-js 10 -u https://example.com/FUZZ -w wordlist.txt`
 
 - `--no-persist`: Disable persistence of successful findings.  
   Example: `ffufai --no-persist -u https://example.com/FUZZ -w wordlist.txt`
@@ -203,6 +216,7 @@ All other ffuf parameters can be used as normal. For a full list of ffuf paramet
 - All ffuf parameters are passed through to ffuf, so you can use any ffuf option with ffufai.
 - Provider priority defaults to Gemini → OpenAI → Anthropic → Groq → OpenRouter (override with `--providers`).
 - Wappalyzer-style signature data lives in `config/tech_signatures.json` and can be extended.
+- Wordlist catalog mappings live in `config/wordlist_catalog.json` and can be extended.
 
 ## Research Directions
 

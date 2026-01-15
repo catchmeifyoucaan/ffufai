@@ -2,6 +2,7 @@
 
 import argparse
 import hashlib
+import re
 import json
 import os
 import random
@@ -21,7 +22,9 @@ import requests
 DEFAULT_CACHE_PATH = os.path.expanduser("~/.cache/ffufai/cache.json")
 DEFAULT_STATE_PATH = os.path.expanduser("~/.cache/ffufai/state.json")
 DEFAULT_FINDINGS_PATH = os.path.expanduser("~/.cache/ffufai/findings.json")
+DEFAULT_KB_PATH = os.path.expanduser("~/.cache/ffufai/knowledge.json")
 DEFAULT_SIGNATURE_PATH = os.path.join(os.path.dirname(__file__), "config", "tech_signatures.json")
+DEFAULT_WORDLIST_CATALOG = os.path.join(os.path.dirname(__file__), "config", "wordlist_catalog.json")
 
 DEFAULT_PROVIDER_ORDER = ["gemini", "openai", "anthropic", "groq", "openrouter"]
 
@@ -112,6 +115,13 @@ def load_signature_config(signature_path):
             return json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError):
         return {"technologies": {}}
+
+def load_wordlist_catalog(catalog_path):
+    try:
+        with open(catalog_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"lists": {}, "tech_map": {}, "profiles": {}, "goals": {}}
 
 def extract_script_sources(content):
     if not content:
@@ -711,6 +721,19 @@ def load_findings(findings_path):
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
+def load_knowledge(kb_path):
+    try:
+        with open(kb_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"tech_tokens": {}, "global_tokens": {}}
+
+
+def save_knowledge(kb_path, knowledge_data):
+    os.makedirs(os.path.dirname(kb_path), exist_ok=True)
+    with open(kb_path, "w", encoding="utf-8") as handle:
+        json.dump(knowledge_data, handle, indent=2, sort_keys=True)
+
 
 def save_findings(findings_path, findings_data):
     os.makedirs(os.path.dirname(findings_path), exist_ok=True)
@@ -750,6 +773,36 @@ def extract_learned_entries(findings_data, target_url):
     }
 
 
+def extract_tokens_from_paths(paths):
+    tokens = []
+    for path in paths:
+        if not path:
+            continue
+        cleaned = path.strip("/")
+        if not cleaned:
+            continue
+        for segment in cleaned.split("/"):
+            if segment and segment not in tokens:
+                tokens.append(segment)
+    return tokens
+
+
+def update_knowledge_base(knowledge_data, techs, paths):
+    tokens = extract_tokens_from_paths(paths)
+    for token in tokens:
+        knowledge_data["global_tokens"][token] = knowledge_data["global_tokens"].get(token, 0) + 1
+    for tech in techs:
+        tech_bucket = knowledge_data["tech_tokens"].setdefault(tech, {})
+        for token in tokens:
+            tech_bucket[token] = tech_bucket.get(token, 0) + 1
+    return knowledge_data
+
+
+def get_top_tokens(token_map, limit=30):
+    sorted_items = sorted(token_map.items(), key=lambda item: item[1], reverse=True)
+    return [item[0] for item in sorted_items[:limit]]
+
+
 def merge_unique(primary_list, extra_list, max_size=None):
     combined = list(primary_list)
     for item in extra_list:
@@ -782,6 +835,137 @@ def normalize_extensions(extensions):
     return normalized
 
 
+def load_wordlist_entries(catalog, list_names, max_size=None):
+    entries = []
+    lists = catalog.get("lists", {})
+    for list_name in list_names:
+        list_def = lists.get(list_name, {})
+        for entry in list_def.get("entries", []):
+            if entry not in entries:
+                entries.append(entry)
+        for path in list_def.get("paths", []):
+            if not path or not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as handle:
+                    for line in handle:
+                        value = line.strip()
+                        if value and value not in entries:
+                            entries.append(value)
+            except OSError:
+                continue
+    if max_size is not None:
+        return entries[:max_size]
+    return entries
+
+
+def select_wordlists(catalog, techs, profile, goal, mode):
+    selected = []
+    profiles = catalog.get("profiles", {})
+    goals = catalog.get("goals", {})
+    tech_map = catalog.get("tech_map", {})
+    if mode == "wordlist":
+        selected.extend(profiles.get(profile, []))
+        selected.extend(goals.get(goal, []))
+    for tech in techs:
+        selected.extend(tech_map.get(tech, []))
+    return list(dict.fromkeys(selected))
+
+
+def classify_findings(findings):
+    categories = set()
+    for item in findings:
+        if not item:
+            continue
+        path = urlparse(item).path.lower()
+        if "/admin" in path or "admin" in path:
+            categories.add("admin")
+        if "/api" in path or "graphql" in path:
+            categories.add("api")
+        if "login" in path or "auth" in path or "signin" in path:
+            categories.add("auth")
+        if "backup" in path or "dump" in path or "tar" in path or "zip" in path:
+            categories.add("backup")
+        if "debug" in path or "trace" in path:
+            categories.add("debug")
+    return sorted(categories)
+
+
+def merge_wordlists(primary, extra, max_size=None):
+    combined = list(primary)
+    for entry in extra:
+        if entry not in combined:
+            combined.append(entry)
+    if max_size is not None:
+        return combined[:max_size]
+    return combined
+
+
+def extract_paths_from_js(js_content):
+    if not js_content:
+        return []
+    paths = set()
+    for match in re.findall(r"\\/([a-zA-Z0-9_\\-\\/]{3,})", js_content):
+        if match:
+            paths.add(match)
+    for match in re.findall(r"/[a-zA-Z0-9_\\-\\/]{3,}", js_content):
+        paths.add(match.lstrip("/"))
+    return sorted(paths)
+
+
+def fetch_js_paths(script_urls, base_url, max_files=5):
+    paths = []
+    for url in script_urls[:max_files]:
+        if url.startswith("//"):
+            url = f"https:{url}"
+        elif url.startswith("/"):
+            url = f"{base_url.rstrip('/')}{url}"
+        try:
+            response = requests.get(url, timeout=20)
+            response.raise_for_status()
+            paths.extend(extract_paths_from_js(response.text))
+        except requests.RequestException:
+            continue
+    return list(dict.fromkeys(paths))
+
+
+def fetch_sitemap_paths(base_url):
+    candidates = [f"{base_url.rstrip('/')}/sitemap.xml", f"{base_url.rstrip('/')}/sitemap_index.xml"]
+    paths = []
+    for url in candidates:
+        try:
+            response = requests.get(url, timeout=20)
+            response.raise_for_status()
+            xml = response.text
+            for match in re.findall(r"<loc>(.*?)</loc>", xml):
+                try:
+                    parsed = urlparse(match)
+                    if parsed.path:
+                        paths.append(parsed.path.lstrip("/"))
+                except ValueError:
+                    continue
+        except requests.RequestException:
+            continue
+    return list(dict.fromkeys(paths))
+
+
+def fetch_robots_paths(base_url):
+    paths = []
+    url = f"{base_url.rstrip('/')}/robots.txt"
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        for line in response.text.splitlines():
+            line = line.strip()
+            if line.lower().startswith("disallow:") or line.lower().startswith("allow:"):
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    value = parts[1].strip()
+                    if value and value != "/":
+                        paths.append(value.lstrip("/"))
+    except requests.RequestException:
+        return []
+    return list(dict.fromkeys(paths))
 def parse_provider_order(value):
     if not value:
         return DEFAULT_PROVIDER_ORDER
@@ -949,13 +1133,17 @@ def main():
     parser.add_argument('--no-cache', action='store_true', help='Disable cache usage')
     parser.add_argument('--state-path', default=DEFAULT_STATE_PATH, help='State file path for provider rotation')
     parser.add_argument('--findings-path', default=DEFAULT_FINDINGS_PATH, help='Path for persisted findings')
+    parser.add_argument('--knowledge-path', default=DEFAULT_KB_PATH, help='Path to global knowledge base')
     parser.add_argument('--signature-path', default=DEFAULT_SIGNATURE_PATH, help='Path to tech signature JSON file')
+    parser.add_argument('--wordlist-catalog', default=DEFAULT_WORDLIST_CATALOG, help='Path to wordlist catalog JSON')
     parser.add_argument('--providers', help='Comma-separated provider order (gemini,openai,anthropic,groq,openrouter)')
     parser.add_argument('--no-rotate', action='store_true', help='Disable provider/key rotation')
     parser.add_argument('--probe-methods', action='store_true', help='Use OPTIONS to check allowed methods')
     parser.add_argument('--dns-tls', action='store_true', help='Enrich context with DNS and TLS metadata')
     parser.add_argument('--error-probe', action='store_true', help='Probe a random error page for context')
     parser.add_argument('--ai-strategy', action='store_true', help='Use AI to tune mode and list sizes')
+    parser.add_argument('--recon', action='store_true', help='Enable recon-driven wordlist generation')
+    parser.add_argument('--recon-max-js', type=int, default=5, help='Max JS files to mine for paths')
     parser.add_argument('--no-persist', action='store_true', help='Disable persistence of successful findings')
     parser.add_argument('--report', action='store_true', help='Generate a concise attack plan report')
     parser.add_argument('--feedback-loop', action='store_true', help='Run a refinement pass based on ffuf results')
@@ -994,7 +1182,9 @@ def main():
         return
 
     findings_data = load_findings(args.findings_path)
+    knowledge_data = load_knowledge(args.knowledge_path)
     signature_config = load_signature_config(args.signature_path)
+    wordlist_catalog = load_wordlist_catalog(args.wordlist_catalog)
 
     for url in urls:
         parsed_url = urlparse(url)
@@ -1036,6 +1226,8 @@ def main():
             wappalyzer_matches=wappalyzer_matches,
         )
         learned_entries = extract_learned_entries(findings_data, base_url)
+        combined_techs = list(dict.fromkeys(fingerprints.get("platform_hints", []) + wappalyzer_matches))
+        catalog_lists = select_wordlists(wordlist_catalog, combined_techs, args.profile, args.goal, mode)
 
         mode = args.mode
         if args.wordlists:
@@ -1045,6 +1237,15 @@ def main():
 
         default_wordlist_size = args.max_wordlist_size or 200
         max_extensions = args.max_extensions
+        recon_paths = []
+        if mode == "wordlist" and catalog_lists:
+            default_wordlist_size = max(default_wordlist_size, len(catalog_lists) * 25)
+        if args.recon and mode == "wordlist":
+            recon_paths.extend(fetch_robots_paths(base_url))
+            recon_paths.extend(fetch_sitemap_paths(base_url))
+            if scripts:
+                recon_paths.extend(fetch_js_paths(scripts, base_url, max_files=args.recon_max_js))
+            recon_paths = list(dict.fromkeys(recon_paths))
         if args.ai_strategy:
             strategy_prompt, strategy_system = build_strategy_prompt(
                 url, headers, fingerprints, args.profile, args.goal, learned_entries=learned_entries
@@ -1120,7 +1321,16 @@ def main():
             if strategy:
                 print(json.dumps(strategy, indent=2))
             learned_paths = normalize_learned_paths(learned_entries.get("paths", []))
-            combined_wordlist = merge_unique(learned_paths, output['wordlist'], max_size=size)
+            catalog_entries = load_wordlist_entries(wordlist_catalog, catalog_lists)
+            knowledge_tokens = get_top_tokens(knowledge_data.get("global_tokens", {}), limit=50)
+            tech_tokens = []
+            for tech in combined_techs:
+                tech_tokens.extend(get_top_tokens(knowledge_data.get("tech_tokens", {}).get(tech, {}), limit=30))
+            combined_wordlist = merge_wordlists(catalog_entries, output['wordlist'])
+            combined_wordlist = merge_wordlists(combined_wordlist, learned_paths)
+            combined_wordlist = merge_wordlists(combined_wordlist, recon_paths)
+            combined_wordlist = merge_wordlists(combined_wordlist, tech_tokens)
+            combined_wordlist = merge_wordlists(combined_wordlist, knowledge_tokens, max_size=size)
             wordlist = '\n'.join(combined_wordlist)
 
             if args.report and report:
@@ -1151,6 +1361,8 @@ def main():
                     if findings:
                         findings_data = update_findings(findings_data, base_url, findings)
                         save_findings(args.findings_path, findings_data)
+                        knowledge_data = update_knowledge_base(knowledge_data, combined_techs, findings)
+                        save_knowledge(args.knowledge_path, knowledge_data)
 
                 if args.feedback_loop:
                     for _ in range(max(1, args.feedback_rounds)):
@@ -1162,6 +1374,9 @@ def main():
                         refine_prompt, refine_system = build_refinement_prompt(url, findings, args.profile, args.goal)
                         refinement = json.loads(router.complete(refine_system, refine_prompt, max_tokens=600))
                         refined_list = refinement.get("wordlist", [])
+                        categories = classify_findings(findings)
+                        adaptive_lists = load_wordlist_entries(wordlist_catalog, categories)
+                        refined_list = merge_wordlists(refined_list, adaptive_lists)
                         if not refined_list:
                             break
                         refinement_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
@@ -1236,6 +1451,8 @@ def main():
                 if findings:
                     findings_data = update_findings(findings_data, base_url, findings)
                     save_findings(args.findings_path, findings_data)
+                    knowledge_data = update_knowledge_base(knowledge_data, combined_techs, findings)
+                    save_knowledge(args.knowledge_path, knowledge_data)
 
 
 if __name__ == '__main__':
