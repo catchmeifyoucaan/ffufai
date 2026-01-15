@@ -58,7 +58,17 @@
     "stealth": ["common", "auth"],
     "depth": ["common", "admin", "api", "auth", "backup", "config", "debug", "static"],
     "api-only": ["api", "auth", "debug"],
-    "spa": ["static", "api"]
+    "spa": ["static", "api"],
+    "admin-heavy": ["admin", "auth", "config", "debug"],
+    "cloud-native": ["api", "config", "debug", "health"],
+    "legacy": ["common", "backup", "config"],
+    "mobile-backend": ["api", "auth"],
+    "partner-portal": ["auth", "admin", "api"],
+    "healthcheck": ["health", "debug"],
+    "cdn-edge": ["static"],
+    "auth-heavy": ["auth", "admin"],
+    "storage": ["backup", "static", "api"],
+    "payments": ["api", "auth", "config"]
   },
   "goals": {
     "general": ["common"],
@@ -69,7 +79,17 @@
     "idor": ["api"],
     "ssrf": ["api"],
     "lfi": ["config", "debug"],
-    "sqli": ["api"]
+    "sqli": ["api"],
+    "xss": ["api", "auth"],
+    "csrf": ["auth"],
+    "file-upload": ["api", "static"],
+    "secrets": ["config", "backup"],
+    "infra": ["health", "debug"],
+    "compliance": ["backup", "config"],
+    "webhooks": ["api"],
+    "graphql": ["api"],
+    "mobile": ["api"],
+    "bypass-waf": ["static", "api"]
   },
   "tech_map": {
     "wordpress": ["wordpress"],
@@ -80,6 +100,16 @@
     "laravel": ["laravel"],
     "rails": ["rails"],
     "spring": ["spring"],
-    "dotnet": ["dotnet"]
+    "dotnet": ["dotnet"],
+    "grafana": ["admin", "auth", "api"],
+    "kibana": ["admin", "auth", "api"],
+    "elasticsearch": ["api", "debug"],
+    "prometheus": ["api", "debug"],
+    "loki": ["api", "debug"],
+    "firebase": ["api", "auth"],
+    "supabase": ["api", "auth"],
+    "okta": ["auth"],
+    "auth0": ["auth"],
+    "keycloak": ["auth"]
   }
 }

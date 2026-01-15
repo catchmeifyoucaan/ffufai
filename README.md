@@ -133,10 +133,10 @@ ffufai accepts all the parameters that ffuf does, plus a few additional ones:
 - `--mode`: Choose `extensions`, `wordlist`, or `auto` (default).  
   Example: `ffufai --mode wordlist -u https://example.com/FUZZ -w wordlist.txt`
 
-- `--profile`: Tuning profile (`balanced`, `critical`, `stealth`, `depth`, `api-only`, `spa`).  
+- `--profile`: Tuning profile (`balanced`, `critical`, `stealth`, `depth`, `api-only`, `spa`, `admin-heavy`, `cloud-native`, `legacy`, `mobile-backend`, `partner-portal`, `healthcheck`, `cdn-edge`, `auth-heavy`, `storage`, `payments`).  
   Example: `ffufai --profile critical -u https://example.com/FUZZ -w wordlist.txt`
 
-- `--goal`: Primary hunting goal (`general`, `auth-bypass`, `data-exfil`, `rce`, `misconfig`, `idor`, `ssrf`, `lfi`, `sqli`).  
+- `--goal`: Primary hunting goal (`general`, `auth-bypass`, `data-exfil`, `rce`, `misconfig`, `idor`, `ssrf`, `lfi`, `sqli`, `xss`, `csrf`, `file-upload`, `secrets`, `infra`, `compliance`, `webhooks`, `graphql`, `mobile`, `bypass-waf`).  
   Example: `ffufai --goal data-exfil -u https://example.com/FUZZ -w wordlist.txt`
 
 - `--consensus`: Use all available providers to cross-check suggestions.  
