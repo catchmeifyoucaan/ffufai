@@ -4,6 +4,10 @@ import argparse
 import hashlib
 import json
 import os
+import random
+import socket
+import ssl
+import string
 import subprocess
 import tempfile
 import time
@@ -17,6 +21,7 @@ import requests
 DEFAULT_CACHE_PATH = os.path.expanduser("~/.cache/ffufai/cache.json")
 DEFAULT_STATE_PATH = os.path.expanduser("~/.cache/ffufai/state.json")
 DEFAULT_FINDINGS_PATH = os.path.expanduser("~/.cache/ffufai/findings.json")
+DEFAULT_SIGNATURE_PATH = os.path.join(os.path.dirname(__file__), "config", "tech_signatures.json")
 
 DEFAULT_PROVIDER_ORDER = ["gemini", "openai", "anthropic", "groq", "openrouter"]
 
@@ -68,7 +73,7 @@ TECH_KB = {
 }
 
 MODEL_DEFAULTS = {
-    "gemini": os.getenv("GEMINI_MODEL", "gemini-1.5-pro"),
+    "gemini": os.getenv("GEMINI_MODEL", "gemini-3.5-pro"),
     "openai": os.getenv("OPENAI_MODEL", "gpt-4o"),
     "anthropic": os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
     "groq": os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile"),
@@ -99,6 +104,62 @@ def save_state(state_path, state_data):
     os.makedirs(os.path.dirname(state_path), exist_ok=True)
     with open(state_path, "w", encoding="utf-8") as handle:
         json.dump(state_data, handle, indent=2, sort_keys=True)
+
+
+def load_signature_config(signature_path):
+    try:
+        with open(signature_path, "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"technologies": {}}
+
+def extract_script_sources(content):
+    if not content:
+        return []
+    soup = BeautifulSoup(content, "html.parser")
+    sources = []
+    for script in soup.find_all("script"):
+        src = script.get("src")
+        if src:
+            sources.append(src)
+    return sources
+
+
+def normalize_text(value):
+    if not value:
+        return ""
+    return str(value).lower()
+
+
+def detect_signatures(signature_config, headers, scripts, content):
+    technologies = signature_config.get("technologies", {})
+    header_blob = " ".join([f"{key}:{value}" for key, value in headers.items()]).lower()
+    script_blob = " ".join(scripts).lower() if scripts else ""
+    content_blob = content.lower() if content else ""
+    detections = []
+
+    for name, signatures in technologies.items():
+        header_signatures = signatures.get("headers", [])
+        script_signatures = signatures.get("scripts", [])
+        html_signatures = signatures.get("html", [])
+        matched = False
+        for sig in header_signatures:
+            if normalize_text(sig) in header_blob:
+                matched = True
+                break
+        if not matched:
+            for sig in script_signatures:
+                if normalize_text(sig) in script_blob:
+                    matched = True
+                    break
+        if not matched:
+            for sig in html_signatures:
+                if normalize_text(sig) in content_blob:
+                    matched = True
+                    break
+        if matched:
+            detections.append(name)
+    return sorted(set(detections))
 
 
 def get_response(url):
@@ -151,6 +212,57 @@ def probe_methods(url):
     except requests.RequestException as e:
         print(f"Error probing methods: {e}")
         return {"allowed_methods": [], "status_code": None}
+
+def enrich_dns_tls(hostname):
+    if not hostname:
+        return {"addresses": [], "tls": {}}
+    addresses = []
+    try:
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+            if family == socket.AF_INET:
+                addresses.append(sockaddr[0])
+            elif family == socket.AF_INET6:
+                addresses.append(sockaddr[0])
+    except socket.gaierror:
+        addresses = []
+    addresses = sorted(set(addresses))
+
+    tls_info = {}
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection((hostname, 443), timeout=5) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                cert = ssock.getpeercert()
+                tls_info = {
+                    "issuer": cert.get("issuer"),
+                    "subject": cert.get("subject"),
+                    "notAfter": cert.get("notAfter"),
+                    "notBefore": cert.get("notBefore"),
+                    "subjectAltName": cert.get("subjectAltName", []),
+                }
+    except (OSError, ssl.SSLError):
+        tls_info = {}
+
+    return {"addresses": addresses, "tls": tls_info}
+
+
+def probe_error_page(base_url):
+    random_suffix = "".join(random.choice(string.ascii_lowercase) for _ in range(12))
+    target = f"{base_url.rstrip('/')}/{random_suffix}"
+    try:
+        response = requests.get(target, allow_redirects=True, timeout=15)
+        content = response.text or ""
+        soup = BeautifulSoup(content, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else ""
+        snippet = " ".join(content.split())[:200]
+        return {
+            "status_code": response.status_code,
+            "title": title,
+            "snippet": snippet,
+        }
+    except requests.RequestException as e:
+        print(f"Error probing error page: {e}")
+        return {"status_code": None, "title": "", "snippet": ""}
 
 def detect_platform_hints(headers, cookies, scripts, content):
     header_blob = " ".join([f"{key}:{value}" for key, value in headers.items()]).lower()
@@ -344,7 +456,17 @@ class LLMRouter:
         return response
 
 
-def extract_fingerprints(url, headers, cookies, content, allowed_methods=None, forms=None):
+def extract_fingerprints(
+    url,
+    headers,
+    cookies,
+    content,
+    allowed_methods=None,
+    forms=None,
+    dns_tls=None,
+    error_page=None,
+    wappalyzer_matches=None,
+):
     fingerprints = {
         "server": headers.get("Server"),
         "powered_by": headers.get("X-Powered-By"),
@@ -356,6 +478,9 @@ def extract_fingerprints(url, headers, cookies, content, allowed_methods=None, f
         "platform_hints": [],
         "allowed_methods": allowed_methods or [],
         "forms": forms or [],
+        "dns_tls": dns_tls or {},
+        "error_page": error_page or {},
+        "wappalyzer": wappalyzer_matches or [],
     }
     if content:
         soup = BeautifulSoup(content, "html.parser")
@@ -499,6 +624,24 @@ def build_attack_plan_prompt(url, headers, fingerprints, plan, profile, goal, le
     JSON Response:
     """
     system = "You are a top-tier bug bounty hunter. Provide crisp, actionable steps."
+    return prompt, system
+
+
+def build_strategy_prompt(url, headers, fingerprints, profile, goal, learned_entries=None):
+    prompt = f"""
+    You are tuning a fuzzing strategy. Return JSON only with:
+    mode (extensions|wordlist), wordlist_size (int), max_extensions (int),
+    notes (string), and ffuf_tips (list).
+    Consider fingerprints, errors, and tech signals.
+    Profile guidance: {PROFILE_GUIDANCE.get(profile, "")}
+    Goal guidance: {GOAL_GUIDANCE.get(goal, "")}
+    URL: {url}
+    Headers: {headers}
+    Fingerprints: {fingerprints}
+    Learned entries: {learned_entries}
+    JSON Response:
+    """
+    system = "You are a precise security strategist. Return JSON only."
     return prompt, system
 
 
@@ -782,6 +925,15 @@ def build_refinement_prompt(url, findings, profile, goal):
     system = "You are a strict reviewer who proposes only high-signal refinements."
     return prompt, system
 
+
+def apply_strategy_overrides(strategy, default_mode, default_wordlist_size, default_max_extensions):
+    if not strategy:
+        return default_mode, default_wordlist_size, default_max_extensions
+    mode = strategy.get("mode") or default_mode
+    wordlist_size = strategy.get("wordlist_size") or default_wordlist_size
+    max_extensions = strategy.get("max_extensions") or default_max_extensions
+    return mode, wordlist_size, max_extensions
+
 def main():
     parser = argparse.ArgumentParser(description='ffufai - AI-powered ffuf wrapper')
     parser.add_argument('--ffuf-path', default='ffuf', help='Path to ffuf executable')
@@ -797,9 +949,13 @@ def main():
     parser.add_argument('--no-cache', action='store_true', help='Disable cache usage')
     parser.add_argument('--state-path', default=DEFAULT_STATE_PATH, help='State file path for provider rotation')
     parser.add_argument('--findings-path', default=DEFAULT_FINDINGS_PATH, help='Path for persisted findings')
+    parser.add_argument('--signature-path', default=DEFAULT_SIGNATURE_PATH, help='Path to tech signature JSON file')
     parser.add_argument('--providers', help='Comma-separated provider order (gemini,openai,anthropic,groq,openrouter)')
     parser.add_argument('--no-rotate', action='store_true', help='Disable provider/key rotation')
     parser.add_argument('--probe-methods', action='store_true', help='Use OPTIONS to check allowed methods')
+    parser.add_argument('--dns-tls', action='store_true', help='Enrich context with DNS and TLS metadata')
+    parser.add_argument('--error-probe', action='store_true', help='Probe a random error page for context')
+    parser.add_argument('--ai-strategy', action='store_true', help='Use AI to tune mode and list sizes')
     parser.add_argument('--no-persist', action='store_true', help='Disable persistence of successful findings')
     parser.add_argument('--report', action='store_true', help='Generate a concise attack plan report')
     parser.add_argument('--feedback-loop', action='store_true', help='Run a refinement pass based on ffuf results')
@@ -838,6 +994,7 @@ def main():
         return
 
     findings_data = load_findings(args.findings_path)
+    signature_config = load_signature_config(args.signature_path)
 
     for url in urls:
         parsed_url = urlparse(url)
@@ -851,16 +1008,33 @@ def main():
         cookies = None
         content = None
         allowed_methods = []
+        dns_tls = {}
+        error_page = {}
+        strategy = None
         if args.probe_methods:
             method_probe = probe_methods(base_url)
             allowed_methods = method_probe.get("allowed_methods", [])
+        if args.dns_tls:
+            dns_tls = enrich_dns_tls(parsed_url.hostname)
+        if args.error_probe:
+            error_page = probe_error_page(base_url)
         if args.include_response:
             response = get_response(base_url)
             headers = response.get('headers', headers)
             cookies = response.get('cookies')
             content = response.get('content')
-
-        fingerprints = extract_fingerprints(base_url, headers, cookies or {}, content, allowed_methods=allowed_methods)
+        scripts = extract_script_sources(content or "")
+        wappalyzer_matches = detect_signatures(signature_config, headers, scripts, content or "")
+        fingerprints = extract_fingerprints(
+            base_url,
+            headers,
+            cookies or {},
+            content,
+            allowed_methods=allowed_methods,
+            dns_tls=dns_tls,
+            error_page=error_page,
+            wappalyzer_matches=wappalyzer_matches,
+        )
         learned_entries = extract_learned_entries(findings_data, base_url)
 
         mode = args.mode
@@ -869,6 +1043,20 @@ def main():
         elif mode == "auto":
             mode = choose_mode(url, args.profile)
 
+        default_wordlist_size = args.max_wordlist_size or 200
+        max_extensions = args.max_extensions
+        if args.ai_strategy:
+            strategy_prompt, strategy_system = build_strategy_prompt(
+                url, headers, fingerprints, args.profile, args.goal, learned_entries=learned_entries
+            )
+            try:
+                strategy = json.loads(router.complete(strategy_system, strategy_prompt, max_tokens=300))
+                mode, default_wordlist_size, max_extensions = apply_strategy_overrides(
+                    strategy, mode, default_wordlist_size, max_extensions
+                )
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"Error parsing AI strategy response. Using defaults. Error: {e}")
+
         cache_identifier = cache_key(
             url,
             headers,
@@ -876,7 +1064,7 @@ def main():
             mode,
             args.profile,
             args.goal,
-            args.max_wordlist_size or args.max_extensions,
+            default_wordlist_size if mode == "wordlist" else max_extensions,
             learned_entries=learned_entries,
         )
 
@@ -892,7 +1080,7 @@ def main():
 
         if mode == "wordlist":
             try:
-                size = args.max_wordlist_size or 200
+                size = default_wordlist_size
                 if output is None:
                     if args.consensus:
                         plan, output = get_consensus_wordlist(
@@ -929,6 +1117,8 @@ def main():
                 return
 
             print(output)
+            if strategy:
+                print(json.dumps(strategy, indent=2))
             learned_paths = normalize_learned_paths(learned_entries.get("paths", []))
             combined_wordlist = merge_unique(learned_paths, output['wordlist'], max_size=size)
             wordlist = '\n'.join(combined_wordlist)
@@ -991,7 +1181,7 @@ def main():
                             url,
                             headers,
                             fingerprints,
-                            args.max_extensions,
+                            max_extensions,
                             args.profile,
                             args.goal,
                             router,
@@ -1003,7 +1193,7 @@ def main():
                             headers,
                             fingerprints,
                             router,
-                            args.max_extensions,
+                            max_extensions,
                             args.profile,
                             args.goal,
                             learned_entries=learned_entries,
@@ -1017,8 +1207,10 @@ def main():
                 return
 
             print(output)
+            if strategy:
+                print(json.dumps(strategy, indent=2))
             learned_exts = normalize_extensions(learned_entries.get("extensions", []))
-            combined_extensions = merge_unique(learned_exts, output['extensions'], max_size=args.max_extensions)
+            combined_extensions = merge_unique(learned_exts, output['extensions'], max_size=max_extensions)
             extensions = ','.join(combined_extensions)
 
             if args.report and report:

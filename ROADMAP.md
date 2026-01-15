@@ -5,6 +5,7 @@ This roadmap maps the major capability areas and how they build on each other.
 ## Phase 1: Accuracy & Signal
 - Multi-phase AI inference (plan → generate → verify) for extensions and wordlists.
 - Technology fingerprinting from headers + HTML + cookies to improve context.
+- Wappalyzer-style signatures and config-driven tech mappings.
 - Profiles/goals to bias toward critical targets and reduce noise.
 
 ## Phase 2: Performance & Scale
@@ -16,6 +17,7 @@ This roadmap maps the major capability areas and how they build on each other.
 - Consensus mode across Gemini, OpenAI, Anthropic, Groq, and OpenRouter.
 - Feedback loop using ffuf JSON results to refine wordlists.
 - Concise attack-plan reporting to guide follow-up actions.
+- DNS/TLS and error-page enrichment signals.
 
 ## Phase 4: Expansion
 - Expand tech knowledge base and platform indicators.

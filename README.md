@@ -24,8 +24,10 @@ ffufai is an AI-powered wrapper for the popular web fuzzer ffuf. It automaticall
 - Multi-phase AI inference (plan → generate → verify) to reduce false positives
 - Multi-provider routing with Gemini-first priority and optional consensus mode
 - Profiles and goals to bias toward critical targets
+- Wappalyzer-style signature detection for fast tech hints
 - Optional feedback loop that refines wordlists based on ffuf results
 - Active-learning persistence of successful findings
+- DNS/TLS and error-page context enrichment
 - Caching for faster repeated scans
 - Passes through all ffuf parameters
 
@@ -92,7 +94,7 @@ ffufai is an AI-powered wrapper for the popular web fuzzer ffuf. It automaticall
 
    Optional model overrides:
    ```
-   export GEMINI_MODEL='gemini-1.5-pro'
+   export GEMINI_MODEL='gemini-3.5-pro'
    export OPENAI_MODEL='gpt-4o'
    export ANTHROPIC_MODEL='claude-sonnet-4-20250514'
    export GROQ_MODEL='llama-3.1-70b-versatile'
@@ -151,6 +153,9 @@ ffufai accepts all the parameters that ffuf does, plus a few additional ones:
 - `--findings-path`: Path to the findings persistence file (default `~/.cache/ffufai/findings.json`).  
   Example: `ffufai --findings-path /tmp/ffufai-findings.json -u https://example.com/FUZZ -w wordlist.txt`
 
+- `--signature-path`: Path to the tech signature JSON file (default `config/tech_signatures.json`).  
+  Example: `ffufai --signature-path /tmp/tech_signatures.json -u https://example.com/FUZZ -w wordlist.txt`
+
 - `--providers`: Comma-separated provider order (gemini,openai,anthropic,groq,openrouter).  
   Example: `ffufai --providers gemini,openai,groq -u https://example.com/FUZZ -w wordlist.txt`
 
@@ -159,6 +164,15 @@ ffufai accepts all the parameters that ffuf does, plus a few additional ones:
 
 - `--probe-methods`: Use OPTIONS to check allowed HTTP methods and include in AI context.  
   Example: `ffufai --probe-methods -u https://example.com/FUZZ -w wordlist.txt`
+
+- `--dns-tls`: Enrich context with DNS and TLS metadata.  
+  Example: `ffufai --dns-tls -u https://example.com/FUZZ -w wordlist.txt`
+
+- `--error-probe`: Probe a random error page for context.  
+  Example: `ffufai --error-probe -u https://example.com/FUZZ -w wordlist.txt`
+
+- `--ai-strategy`: Use AI to tune mode and list sizes.  
+  Example: `ffufai --ai-strategy -u https://example.com/FUZZ -w wordlist.txt`
 
 - `--no-persist`: Disable persistence of successful findings.  
   Example: `ffufai --no-persist -u https://example.com/FUZZ -w wordlist.txt`
@@ -188,6 +202,7 @@ All other ffuf parameters can be used as normal. For a full list of ffuf paramet
 - ffufai requires the FUZZ keyword to be at the end of the URL path for accurate extension suggestion. It will warn you if this is not the case.
 - All ffuf parameters are passed through to ffuf, so you can use any ffuf option with ffufai.
 - Provider priority defaults to Gemini → OpenAI → Anthropic → Groq → OpenRouter (override with `--providers`).
+- Wappalyzer-style signature data lives in `config/tech_signatures.json` and can be extended.
 
 ## Research Directions
 

@@ -1,0 +1,64 @@
+{
+  "technologies": {
+    "wordpress": {
+      "headers": ["x-powered-by:wordpress", "link:rel=\"https://api.w.org/\""],
+      "scripts": ["wp-includes", "wp-content"],
+      "html": ["wp-content", "wp-includes"]
+    },
+    "laravel": {
+      "headers": ["x-powered-by:laravel", "set-cookie:laravel_session"],
+      "scripts": ["laravel"],
+      "html": ["laravel"]
+    },
+    "django": {
+      "headers": ["csrftoken", "sessionid"],
+      "scripts": ["django"],
+      "html": ["django"]
+    },
+    "aspnet": {
+      "headers": ["x-powered-by:asp.net", "asp.net", "x-aspnet-version"],
+      "scripts": [],
+      "html": ["__viewstate"]
+    },
+    "spring": {
+      "headers": ["spring", "x-application-context"],
+      "scripts": [],
+      "html": ["spring"]
+    },
+    "react": {
+      "headers": [],
+      "scripts": ["react", "react-dom"],
+      "html": ["data-reactroot", "reactroot"]
+    },
+    "vue": {
+      "headers": [],
+      "scripts": ["vue"],
+      "html": ["data-v-"]
+    },
+    "angular": {
+      "headers": [],
+      "scripts": ["angular"],
+      "html": ["ng-version", "ng-app"]
+    },
+    "nextjs": {
+      "headers": ["x-powered-by:next.js"],
+      "scripts": ["/_next/"],
+      "html": ["__next"]
+    },
+    "nuxt": {
+      "headers": [],
+      "scripts": ["/_nuxt/"],
+      "html": ["__nuxt"]
+    },
+    "fastapi": {
+      "headers": ["fastapi"],
+      "scripts": [],
+      "html": ["swagger-ui"]
+    },
+    "graphql": {
+      "headers": [],
+      "scripts": [],
+      "html": ["graphql", "graphiql", "graphql-playground"]
+    }
+  }
+}
